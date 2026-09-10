@@ -20,7 +20,7 @@ Full context lives in `agent_docs/`. Start there for any substantive question:
 ## Tech stack
 
 - **Python 3.11**, **PyTorch 2.4+** (uses `torch.func` for per-parameter Jacobians)
-- **jsbgym** (maintained gym-jsbsim fork) + **Gymnasium 0.29+**
+- **jsbgym** (maintained gym-jsbsim fork) + **Gymnasium 1.3.0** <!-- updated after jsbgym probe — original spec said Gymnasium 0.29+ -->
 - **Hydra** for configs, **W&B** for logging, **uv** for env management
 - **pytest** for tests, **ruff** for lint/format
 - No JAX, no Ray/RLlib, no Docker — kept out deliberately

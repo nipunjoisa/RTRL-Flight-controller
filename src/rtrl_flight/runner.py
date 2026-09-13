@@ -11,6 +11,7 @@ below.
 
 from __future__ import annotations
 
+import random
 from pathlib import Path
 from typing import Any
 
@@ -38,7 +39,7 @@ CHECKPOINT_DIR = Path("data/checkpoints")
 CHECKPOINT_SUFFIXES = ("_pretrain.pt", "_online.pt")  # checked in this order
 
 
-def _find_wrapper(env: gym.Env, wrapper_type: type) -> Any | None:
+def find_wrapper(env: gym.Env, wrapper_type: type) -> Any | None:
     """Walks the wrapper stack for an instance of wrapper_type. Not a
     controller-type isinstance check (agent_docs/architecture.md's design
     invariant #1 is specifically about the runner not branching on
@@ -97,14 +98,27 @@ def load_checkpoint_if_present(
         controller.online_updates = force_online_updates
 
 
-def run_one_episode(env: gym.Env, controller: Controller, fault_cfg: Any) -> None:
-    fault_wrapper = _find_wrapper(env, FaultWrapper)
+def run_one_episode(
+    env: gym.Env, controller: Controller, fault_cfg: Any, seed: int | None = None
+) -> None:
+    fault_wrapper = find_wrapper(env, FaultWrapper)
     onset_step = cfg_get(fault_cfg, "onset_step", None)
     surface = cfg_get(fault_cfg, "surface", None)
     severity = cfg_get(fault_cfg, "severity", None)
 
     controller.reset()
-    obs, _info = env.reset()
+    if seed is not None:
+        # env.reset(seed=...) alone is NOT sufficient for reproducibility:
+        # AttitudeHoldTask._new_episode_init samples target_pitch_rad/
+        # target_roll_rad via Python's global `random.uniform`, not
+        # gymnasium's seeded self.np_random (a pre-existing gap in
+        # attitude_task.py, found while wiring up a real multi-seed sweep --
+        # a "seed=" CLI arg that never reached env.reset() at all, and even
+        # once it does, the actual episode-defining randomness lives
+        # outside Gymnasium's seeding convention). Seeding both is what
+        # actually makes a given seed reproduce a specific episode.
+        random.seed(seed)
+    obs, _info = env.reset(seed=seed)
     step_count = 0
     terminated = truncated = False
 
@@ -189,9 +203,9 @@ def run_experiment(
     load_checkpoint_if_present(controller, controller_name, force_online_updates)
 
     try:
-        run_one_episode(env, controller, cfg_get(cfg.env, "fault", None))
+        run_one_episode(env, controller, cfg_get(cfg.env, "fault", None), seed=cfg.seed)
     finally:
-        trace_wrapper = _find_wrapper(env, TraceWrapper)
+        trace_wrapper = find_wrapper(env, TraceWrapper)
         env.close()
 
     if trace_wrapper is None or trace_wrapper.last_output_path is None:

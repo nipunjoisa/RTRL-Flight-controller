@@ -18,8 +18,6 @@ from rtrl_flight.rtrl.sensitivity import (
     step_sensitivity,
 )
 
-torch.manual_seed(0)
-
 INPUT_SIZE = 3
 HIDDEN_SIZE = 5
 OUTPUT_SIZE = 2
@@ -97,6 +95,15 @@ def _bptt_reference_gradients(
 
 
 def test_online_rtrl_matches_full_unroll_autograd() -> None:
+    # Seeded here, not just at module import time: this test's determinism
+    # must not depend on how much of the shared global torch RNG state other
+    # test modules consumed before this one ran (pytest runs test files in a
+    # fixed but non-isolated order -- a module-level manual_seed only
+    # guarantees a fixed state at *import* time, not when this function's
+    # own random draws actually happen). See CLAUDE.md: this is the most
+    # important test in the repo: it must not be able to fail from ordering
+    # alone.
+    torch.manual_seed(0)
     cell, readout = _make_cell_and_readout()
     xs, targets = _toy_inputs_and_targets()
 
@@ -113,6 +120,7 @@ def test_online_rtrl_matches_finite_differences() -> None:
     time, rerun the T-step rollout, compare central finite differences
     against the analytic online-RTRL gradient.
     """
+    torch.manual_seed(0)  # see test_online_rtrl_matches_full_unroll_autograd
     cell, readout = _make_cell_and_readout()
     xs, targets = _toy_inputs_and_targets()
     online_grads = _rtrl_online_gradients(cell, readout, xs, targets)

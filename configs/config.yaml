@@ -26,3 +26,10 @@ training:
   lr: 1e-3
   batch_size: 8
   checkpoint_path: data/checkpoints/bptt_lstm_pretrain.pt
+  # Below: scripts/train_rtrl_warmstart.py. checkpoint_path above doubles as
+  # the BPTT checkpoint to warm-start FROM (same artifact train_bptt.py
+  # produces); output_checkpoint is RTU's own save path, kept distinct since
+  # the two scripts read/write different files.
+  n_episodes: 20
+  save_every: 5
+  output_checkpoint: data/checkpoints/rtrl_rtu_online.pt

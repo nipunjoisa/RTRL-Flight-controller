@@ -1,8 +1,29 @@
+# Retuned via scripts/tune_pid.py (throwaway diagnostic -- not part of any
+# pipeline). Original gains (aileron/elevator (1.0, 0.1, 0.05), rudder
+# (0.5, 0.0, 0.05)) caused the aircraft to fully diverge (NaN state) within
+# a nominal episode -- root cause was a SIGN BUG in
+# rtrl_flight.controllers.pid.PIDController.act(): positive elevator-cmd-
+# norm pitches the nose DOWN in this JSBSim C172 config, confirmed via an
+# open-loop probe, so pitch_error (target_pitch - pitch) needs a NEGATED
+# elevator command, not the un-negated one the code had. No gain magnitude
+# could have fixed that -- higher gain made the positive-feedback
+# divergence worse, exactly as observed. Fixed in pid.py; gains below are
+# retuned against the corrected sign, meeting the target (mean |pitch_error|
+# < 0.2 rad, mean |roll_error| < 0.3 rad over 5 nominal episodes) with
+# margin: mean |pitch_error| = 0.1066 rad, mean |roll_error| = 0.0522 rad.
 _target_: rtrl_flight.controllers.pid.PIDController
-dt: 0.02
+# dt must match 1/agent_interaction_freq (configs/env/*.yaml default to
+# agent_interaction_freq: 5 -> dt=0.2s), not JSBSim's raw integration rate --
+# the old dt: 0.02 (matching a 50Hz assumption that was never true here)
+# silently corrupted the integral/derivative terms in any run built via
+# Hydra instantiation (rtrl_flight.runner.build_controller), independent of
+# the sign-bug fix above. rtrl_flight.training.imitation.pretrain() always
+# computed dt correctly itself and was unaffected.
+dt: 0.2
 gains:
-  aileron: [1.0, 0.1, 0.05]
-  elevator: [1.0, 0.1, 0.05]
-  rudder: [0.5, 0.0, 0.05]
+  aileron: [0.4, 0.02, 0.15]
+  elevator: [0.4, 0.02, 0.15]
+  rudder: [0.1, 0.0, 0.05]
+rudder_roll_coordination_gain: 0.1
 # obs_indices is set by the env at build time once jsbsim_env.py pins the
 # observation layout (agent_docs/environment.md) — not hardcoded here.

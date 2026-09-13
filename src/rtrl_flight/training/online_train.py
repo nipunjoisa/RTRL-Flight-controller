@@ -24,6 +24,7 @@ def warmstart_and_train(
     output_checkpoint: str | Path,
     hidden_size: int = 64,
     lr: float = 1e-3,
+    online_lr: float = 1e-4,
 ) -> list[float]:
     """Loads a warm-started RTRLRTUController and runs it online for
     n_episodes, calling controller.update() every step (online_updates must
@@ -38,7 +39,9 @@ def warmstart_and_train(
     Returns the list of per-episode returns.
     """
     bptt_state_dict = load_bptt_checkpoint(checkpoint_path)
-    controller = RTRLRTUController(hidden_size=hidden_size, lr=lr, online_updates=True)
+    controller = RTRLRTUController(
+        hidden_size=hidden_size, lr=lr, online_lr=online_lr, online_updates=True
+    )
     apply_warmstart(controller, bptt_state_dict)
 
     env = make_env(env_cfg)
@@ -57,7 +60,11 @@ def warmstart_and_train(
             while not (terminated or truncated):
                 action = controller.act(obs)
                 next_obs, reward, terminated, truncated, _info = env.step(action)
-                controller.update(obs, action, reward, next_obs, done=terminated or truncated)
+                # Exactly the Controller ABC's 4 args (see
+                # src/rtrl_flight/controllers/base.py and
+                # rtrl_flight.runner's same note) -- keeps this loop
+                # reusable for any controller, not just RTRLRTUController.
+                controller.update(obs, action, reward, next_obs)
                 episode_return += reward
                 step_count += 1
                 obs = next_obs

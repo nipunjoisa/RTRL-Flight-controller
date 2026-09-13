@@ -3,7 +3,14 @@
 # this is the ablation switch (agent_docs/experiments.md, Scenario 5):
 # same warm-started weights, online_updates: false for the ablation config,
 # no branching needed in the runner (agent_docs/architecture.md).
+#
+# lr vs online_lr: lr is kept for reference/back-compat (not used to build
+# the optimizer); online_lr is what the step-by-step online update actually
+# uses. Lowered to 1e-4 (from lr's 1e-3) per the PART B retuning session --
+# combined with unnormalized -reward as loss, 1e-3 drove the policy to
+# saturate at a constant [1,1,1] action within 20 episodes.
 _target_: rtrl_flight.controllers.rtrl_rtu.RTRLRTUController
 hidden_size: 64
 lr: 1.0e-3
+online_lr: 1.0e-4
 online_updates: true

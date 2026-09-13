@@ -28,12 +28,16 @@ from rtrl_flight.env.make import cfg_get, force_raw_obs, make_env
 # agent_docs/environment.md's obs table: slot 8 = velocities/r-rad_sec
 # (yaw rate), slot 9 = error/pitch-error-rad, slot 10 = error/roll-error-rad.
 PID_OBS_INDICES = {"pitch_error": 9, "roll_error": 10, "yaw_rate": 8}
-# Matches configs/controller/pid.yaml's gains.
+# Matches configs/controller/pid.yaml's gains -- retuned via
+# scripts/tune_pid.py after finding the original gains caused full
+# divergence (a sign bug in PIDController.act(), fixed there; see
+# configs/controller/pid.yaml's comment for the full story).
 PID_GAINS = {
-    "aileron": (1.0, 0.1, 0.05),
-    "elevator": (1.0, 0.1, 0.05),
-    "rudder": (0.5, 0.0, 0.05),
+    "aileron": (0.4, 0.02, 0.15),
+    "elevator": (0.4, 0.02, 0.15),
+    "rudder": (0.1, 0.0, 0.05),
 }
+PID_RUDDER_ROLL_COORDINATION_GAIN = 0.1
 
 
 # Raw-obs crash-detection bounds (see collect_pid_rollouts): AttitudeHoldTask
@@ -179,7 +183,10 @@ def pretrain(
     try:
         agent_interaction_freq = cfg_get(env_cfg, "agent_interaction_freq", 5)
         pid = PIDController(
-            gains=PID_GAINS, obs_indices=PID_OBS_INDICES, dt=1.0 / agent_interaction_freq
+            gains=PID_GAINS,
+            obs_indices=PID_OBS_INDICES,
+            dt=1.0 / agent_interaction_freq,
+            rudder_roll_coordination_gain=PID_RUDDER_ROLL_COORDINATION_GAIN,
         )
         rollouts = collect_pid_rollouts(env, pid, n_episodes)
     finally:

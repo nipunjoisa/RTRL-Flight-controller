@@ -26,6 +26,7 @@ change to the readout math itself.
 
 from __future__ import annotations
 
+from collections import deque
 from pathlib import Path
 from typing import Any
 
@@ -43,12 +44,23 @@ from rtrl_flight.rtrl.sensitivity import (
     step_sensitivity,
 )
 
+# PART B fixes (see the "RTRL online update objective" retuning session):
+# raw -reward as loss was too noisy/unscaled (rewards ~-300/episode) and
+# drove the online update to saturate the policy at constant [1,1,1] action
+# over 20 episodes. Normalizing by a running window, a lower online lr, and
+# tighter grad clipping are all defenses against that same failure mode, not
+# independent tweaks.
+REWARD_WINDOW = 100
+ONLINE_GRAD_CLIP_NORM = 0.5
+SENSITIVITY_NORM_LIMIT = 1e4
+
 
 class RTRLRTUController(Controller):
     def __init__(
         self,
         hidden_size: int = 64,
         lr: float = 1e-3,
+        online_lr: float = 1e-4,
         online_updates: bool = True,
         input_size: int = INPUT_DIM,
         action_dim: int = ACTION_DIM,
@@ -56,15 +68,20 @@ class RTRLRTUController(Controller):
         self.hidden_size = hidden_size
         self.input_size = input_size
         self.action_dim = action_dim
-        self.lr = lr
+        self.lr = lr  # kept for reference/back-compat; not used to build the optimizer below
+        self.online_lr = online_lr
         self.online_updates = online_updates
 
         self.cell = RTUCell(input_size, hidden_size)
         self.output_layer = nn.Linear(hidden_size, action_dim)
-        self.optimizer = torch.optim.Adam(self.parameters(), lr=lr)
+        # online_lr (1e-4 default), not lr (1e-3) -- the online step-by-step
+        # update needs a much smaller step size than an offline warm-start
+        # optimizer would, per PART B.
+        self.optimizer = torch.optim.Adam(self.parameters(), lr=online_lr)
 
         self.h: torch.Tensor
         self.sensitivity: SensitivityState
+        self._reward_history: deque[float]
         self.reset()
 
     def parameters(self) -> list[torch.nn.Parameter]:
@@ -103,7 +120,32 @@ class RTRLRTUController(Controller):
         if not self.online_updates:
             return {}
 
-        loss = -float(reward)
+        # Sanity check (PART B #4): the sensitivity recursion's steady-state
+        # magnitude grows as the recurrence gain `a` -> 1 (observed
+        # empirically: 166 -> 577 over 20 episodes in the pre-fix online
+        # run). Left unchecked this eventually explodes; reset to zeros
+        # rather than let a single pathological episode poison every
+        # subsequent gradient with an astronomically large S.
+        pre_update_sensitivity_norm = self.sensitivity_frobenius_norm()
+        if pre_update_sensitivity_norm > SENSITIVITY_NORM_LIMIT:
+            print(
+                f"WARNING: RTRLRTUController sensitivity norm "
+                f"{pre_update_sensitivity_norm:.2f} exceeded "
+                f"{SENSITIVITY_NORM_LIMIT} -- resetting sensitivity to zeros"
+            )
+            self.sensitivity = SensitivityState.zeros(self.hidden_size, self.input_size)
+
+        # Reward normalization (PART B #1): raw -reward as loss was too
+        # noisy/unscaled (rewards ~-300/episode) and drove the online update
+        # to saturate the policy at constant [1,1,1] action over 20
+        # episodes. Normalizing against a running window turns "how good was
+        # this step" into a same-scale-every-episode signal instead of one
+        # whose absolute magnitude depends on how far into a (possibly
+        # already-bad) episode we are.
+        self._reward_history.append(float(reward))
+        running_mean = float(np.mean(self._reward_history))
+        running_std = float(np.std(self._reward_history))
+        loss = -(float(reward) - running_mean) / (running_std + 1e-8)
 
         # No natural per-output-channel decomposition of a scalar env reward
         # exists (there's no differentiable path from the environment's
@@ -134,7 +176,7 @@ class RTRLRTUController(Controller):
         self.output_layer.weight.grad = dL_dWout.clone()
         self.output_layer.bias.grad = dL_dbout.clone()
 
-        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
+        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=ONLINE_GRAD_CLIP_NORM)
         self.optimizer.step()
 
         return {"online_loss": loss}
@@ -142,6 +184,7 @@ class RTRLRTUController(Controller):
     def reset(self) -> None:
         self.h = self.cell.init_hidden()
         self.sensitivity = SensitivityState.zeros(self.hidden_size, self.input_size)
+        self._reward_history = deque(maxlen=REWARD_WINDOW)
 
     def sensitivity_frobenius_norm(self) -> float:
         """sqrt(sum of squares) across all three sensitivity tensors --
@@ -172,6 +215,7 @@ class RTRLRTUController(Controller):
                 "input_size": self.input_size,
                 "action_dim": self.action_dim,
                 "online_updates": self.online_updates,
+                "reward_history": list(self._reward_history),
             },
             path,
         )
@@ -188,3 +232,4 @@ class RTRLRTUController(Controller):
         )
         self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
         self.online_updates = checkpoint["online_updates"]
+        self._reward_history = deque(checkpoint.get("reward_history", []), maxlen=REWARD_WINDOW)

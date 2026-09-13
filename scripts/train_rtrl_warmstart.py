@@ -32,6 +32,7 @@ def main(cfg: DictConfig) -> None:
         output_checkpoint=output_checkpoint,
         hidden_size=cfg.controller.get("hidden_size", 64),
         lr=cfg.controller.get("lr", cfg.training.lr),
+        online_lr=cfg.controller.get("online_lr", 1e-4),
     )
     print(f"mean return over {len(returns)} episodes: {sum(returns) / len(returns):.4f}")
 

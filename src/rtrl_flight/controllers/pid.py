@@ -22,14 +22,23 @@ class PIDController(Controller):
         gains: dict[str, tuple[float, float, float]],
         obs_indices: dict[str, int],
         dt: float,
+        rudder_roll_coordination_gain: float = 0.0,
     ) -> None:
         """gains: {"aileron": (kp, ki, kd), "elevator": (...), "rudder": (...)}.
         obs_indices: maps each error signal ("roll_error", "pitch_error",
         "yaw_rate") to its index in the flattened observation vector.
+        rudder_roll_coordination_gain: small proportional term added to the
+        rudder's yaw-rate-damping output, proportional to roll_error --
+        adverse yaw couples roll and yaw, so a bank commanded via aileron
+        benefits from a coordinating rudder nudge in the same direction
+        (scripts/tune_pid.py PART A: "key facts about the real C172
+        dynamics"). Defaults to 0.0 (no coordination term) for backward
+        compatibility with any caller not passing it explicitly.
         """
         self.gains = gains
         self.obs_indices = obs_indices
         self.dt = dt
+        self.rudder_roll_coordination_gain = rudder_roll_coordination_gain
         self._integral = dict.fromkeys(gains, 0.0)
         self._prev_error = dict.fromkeys(gains, 0.0)
 
@@ -46,8 +55,20 @@ class PIDController(Controller):
         yaw_rate = obs[self.obs_indices["yaw_rate"]]
 
         aileron = self._pid("aileron", roll_error)
-        elevator = self._pid("elevator", pitch_error)
-        rudder = self._pid("rudder", -yaw_rate)  # yaw-rate damping, no yaw setpoint
+        # NOTE: positive elevator-cmd-norm pitches the nose DOWN in this
+        # JSBSim C172 config (confirmed empirically: a constant +elevator
+        # command measurably decreased pitch -- see scripts/tune_pid.py's
+        # open-loop probe in the PART A session). pitch_error is
+        # target_pitch - pitch, so a positive error (need MORE pitch, nose
+        # up) must produce a NEGATIVE elevator command. The un-negated
+        # version was a positive-feedback sign bug, not just a magnitude
+        # problem -- no gain retuning could have fixed it (higher gain made
+        # divergence worse, exactly as observed before this fix).
+        elevator = self._pid("elevator", -pitch_error)
+        # yaw-rate damping (no yaw setpoint) + a small roll-coordination
+        # term: adverse yaw couples roll and yaw, so banking via aileron
+        # benefits from a rudder nudge in the same direction as roll_error.
+        rudder = self._pid("rudder", -yaw_rate) + self.rudder_roll_coordination_gain * roll_error
 
         return np.clip([aileron, elevator, rudder], -1.0, 1.0).astype(np.float32)
 

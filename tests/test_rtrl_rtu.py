@@ -113,16 +113,35 @@ def test_online_updates_false_is_a_full_noop() -> None:
         assert torch.equal(p_before, p_after.detach())
 
 
-def test_online_updates_true_positive_reward_changes_at_least_one_param() -> None:
+def test_online_updates_true_changes_output_layer_via_per_channel_credit() -> None:
+    """Verifies PART A's per-channel credit assignment (rtrl_rtu.py's
+    update()): with a non-trivial obs carrying real pitch/roll errors in
+    slots 9/10, output_layer.weight/bias must actually change -- their
+    gradient is now dL_dy = (2/action_dim)*(y_t - targets)*loss_scale,
+    a genuine function of those errors, not (as the old, now-removed
+    uniform-broadcast loss + OUTPUT_WEIGHT_DECAY combination used to
+    produce) a side effect of weight decay pulling params toward zero
+    regardless of whether the actual RTRL gradient was zero.
+    """
     controller = _make_rtrl_rtu(online_updates=True)
-    obs = np.random.default_rng(5).normal(size=OBS_DIM).astype(np.float32)
+    obs = np.zeros(OBS_DIM, dtype=np.float32)
+    obs[9] = 0.2  # error/pitch-error-rad
+    obs[10] = -0.3  # error/roll-error-rad
     action = controller.act(obs)
 
+    output_weight_before = controller.output_layer.weight.detach().clone()
+    output_bias_before = controller.output_layer.bias.detach().clone()
     params_before = [p.detach().clone() for p in controller.parameters()]
 
     result = controller.update(obs, action, reward=1.0, next_obs=obs)
 
     assert "online_loss" in result
+    assert not torch.equal(controller.output_layer.weight.detach(), output_weight_before), (
+        "output_layer.weight did not change -- per-channel credit assignment should give it "
+        "a real, non-zero gradient from the pitch/roll errors in next_obs[9]/[10]"
+    )
+    assert not torch.equal(controller.output_layer.bias.detach(), output_bias_before)
+
     changed = any(
         not torch.equal(p_before, p_after.detach())
         for p_before, p_after in zip(params_before, controller.parameters(), strict=True)

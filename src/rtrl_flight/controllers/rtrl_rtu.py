@@ -96,32 +96,17 @@ SENSITIVITY_NORM_LIMIT = 1e4
 # (non-runaway) variation while preventing the observed unbounded growth.
 HIDDEN_STATE_CLIP = 5.0
 
-# Found immediately after adding HIDDEN_STATE_CLIP above: clamping h stops
-# it from exploding, but W_out/b_out still drifted to saturation (e.g.
-# y_t reaching -54 despite a bounded tanh(h) input) -- because the uniform-
-# broadcast credit signal (same dL_dy for all 3 output channels, every
-# single step, ~15000 steps over 50 episodes) is systematically correlated
-# in direction, not just noisy. Reward normalization/lower lr/tighter grad
-# clipping all bound the *per-step* update magnitude, but none of them stop
-# a small, consistently-signed push from accumulating into an unbounded
-# drift over enough steps -- that needs something that actively pulls
-# parameters back, not just limits each individual step. Standard L2 weight
-# decay on the optimizer does exactly that, confirmed empirically to keep
-# W_out bounded and the resulting action non-saturated (real, nonzero
-# variance) over 20+ test episodes. Applied ONLY to output_layer, not cell:
-# decaying cell.a_raw would pull the recurrence gain toward 0 (no memory at
-# all), undermining the entire point of RTRL having temporal memory to
-# adapt.
-OUTPUT_WEIGHT_DECAY = 1e-2
-
-# Hard cap on output_layer.weight's Frobenius norm, applied after every
-# optimizer step (see the note beside its use in update()) -- weight decay
-# alone is a soft pull that a long enough run of systematically-directioned
-# gradient steps can still outrun (confirmed empirically: W_out reached
-# norm 9.6 after 50 episodes despite OUTPUT_WEIGHT_DECAY). A hard cap
-# guarantees boundedness regardless of training length. ~2x the healthy
-# warm-started norm (~0.94, measured) for headroom.
-MAX_OUTPUT_NORM = 2.0
+# REMOVED (see the per-channel credit-assignment fix in update() below):
+# OUTPUT_WEIGHT_DECAY and MAX_OUTPUT_NORM were band-aids over the real bug
+# -- a single scalar loss broadcast identically to all 3 output channels
+# every step, which is systematically correlated in direction regardless of
+# its (correctly bounded, per PART B) magnitude. Weight decay/norm-capping
+# could only ever bound the symptom (W_out's magnitude), never stop the
+# drift itself, and a hard-enough cap just traded "saturated from growth"
+# for "saturated at the cap." Per-channel credit (each output gets its own
+# target and its own gradient sign/magnitude, not a shared broadcast value)
+# removes the systematic correlation at the source, so neither band-aid is
+# needed once it's in place.
 
 
 class RTRLRTUController(Controller):
@@ -145,23 +130,15 @@ class RTRLRTUController(Controller):
         self.output_layer = nn.Linear(hidden_size, action_dim)
         # online_lr (1e-4 default), not lr (1e-3) -- the online step-by-step
         # update needs a much smaller step size than an offline warm-start
-        # optimizer would, per PART B. Weight decay only on output_layer
-        # (see OUTPUT_WEIGHT_DECAY's docstring above) -- cell params get
-        # none, so a_raw/W_in/b_in are never pulled toward zero.
-        self.optimizer = torch.optim.Adam(
-            [
-                {"params": self.cell.parameters(), "weight_decay": 0.0},
-                {
-                    "params": self.output_layer.parameters(),
-                    "weight_decay": OUTPUT_WEIGHT_DECAY,
-                },
-            ],
-            lr=online_lr,
-        )
+        # optimizer would, per PART B. No weight_decay on either param group
+        # (see the "REMOVED" note above) -- per-channel credit assignment
+        # removes the systematic drift that decay used to be a band-aid for.
+        self.optimizer = torch.optim.Adam(self.parameters(), lr=online_lr, weight_decay=0.0)
 
         self.h: torch.Tensor
         self.sensitivity: SensitivityState
         self._reward_history: deque[float]
+        self._last_logits: torch.Tensor
         self.reset()
 
     def parameters(self) -> list[torch.nn.Parameter]:
@@ -187,6 +164,10 @@ class RTRLRTUController(Controller):
             y_t = self.output_layer(tanh_h)
             action = torch.tanh(y_t)
 
+        # Pre-tanh logits, stored (not recomputed) for update()'s per-channel
+        # loss -- see PART A of the per-channel-credit retuning session.
+        self._last_logits = y_t
+
         return action.numpy().astype(np.float32)
 
     def update(
@@ -197,12 +178,7 @@ class RTRLRTUController(Controller):
         next_obs: np.ndarray,
         done: bool = False,
     ) -> dict[str, float]:
-        del (
-            obs,
-            action,
-            next_obs,
-            done,
-        )  # unused: the gradient is a function of self.h/self.sensitivity + reward only
+        del obs, action, done  # unused: next_obs IS used now (PART A per-channel targets)
         if not self.online_updates:
             return {}
 
@@ -234,28 +210,40 @@ class RTRLRTUController(Controller):
             )
             self.sensitivity = SensitivityState.zeros(self.hidden_size, self.input_size)
 
-        # Reward normalization (PART B #1): raw -reward as loss was too
-        # noisy/unscaled (rewards ~-300/episode) and drove the online update
-        # to saturate the policy at constant [1,1,1] action over 20
-        # episodes. Normalizing against a running window turns "how good was
-        # this step" into a same-scale-every-episode signal instead of one
-        # whose absolute magnitude depends on how far into a (possibly
-        # already-bad) episode we are.
+        # Reward normalization (PART B #1, kept): still used, but now only as
+        # a *multiplicative weight* on the per-channel loss below (upweight
+        # when reward is bad, downweight when good) -- not as the loss
+        # itself. Raw -reward as the loss (unscaled, ~-300/episode) was too
+        # noisy; that problem doesn't go away just because the loss is now
+        # per-channel.
         self._reward_history.append(float(reward))
         running_mean = float(np.mean(self._reward_history))
         running_std = float(np.std(self._reward_history))
-        loss = -(float(reward) - running_mean) / (running_std + 1e-8)
+        normalized_reward = (float(reward) - running_mean) / (running_std + 1e-8)
+        loss_scale = 1.0 + max(0.0, -normalized_reward)
 
-        # No natural per-output-channel decomposition of a scalar env reward
-        # exists (there's no differentiable path from the environment's
-        # reward back through the action), so dL/dy_t is a uniform broadcast
-        # of the scalar loss across all action channels -- each channel is
-        # "blamed"/"credited" equally for the single scalar outcome. This is
-        # the online objective's approximation (agent_docs/rtrl.md: "online
-        # RTRL: whatever the deployed objective is"); the RTRL *sensitivity*
-        # math feeding off of it (readout_credit, parameter_gradients) is
-        # exact, per agent_docs/rtrl.md.
-        dL_dy = torch.full((self.action_dim,), loss, dtype=torch.float32)
+        # Per-channel tracking loss (PART A fix -- the actual root-cause
+        # fix): each output channel gets its OWN target and therefore its
+        # OWN gradient sign/magnitude, instead of one scalar loss broadcast
+        # identically to all 3 channels every step. That broadcast was what
+        # made the credit signal systematically correlated in direction
+        # across ~15000 steps regardless of its magnitude -- no amount of
+        # clipping/decay/capping on the *symptom* (parameter magnitude)
+        # could fix a *directional* bias at the source. Targets: aileron
+        # drives roll, elevator drives pitch (see agent_docs/environment.md
+        # for the control mapping), rudder has no direct tracking target
+        # here (its role is yaw-rate damping, not error-tracking).
+        pitch_error = float(next_obs[9])  # error/pitch-error-rad
+        roll_error = float(next_obs[10])  # error/roll-error-rad
+        targets = torch.tensor([-roll_error, -pitch_error, 0.0], dtype=torch.float32)
+
+        y_t = self._last_logits  # pre-tanh logits from the most recent act()
+        channel_losses = (y_t - targets) ** 2
+        loss = channel_losses.mean().item() * loss_scale
+        # d(mean_i (y_i - t_i)^2)/dy_i = (2/action_dim)*(y_i - t_i); loss_scale
+        # is a plain multiplicative constant w.r.t. y_t, so it carries
+        # through unchanged by the product rule.
+        dL_dy = (2.0 / self.action_dim) * (y_t - targets) * loss_scale
 
         tanh_h = torch.tanh(self.h)
         dL_dh = readout_credit(dL_dy, self.output_layer.weight, self.h)
@@ -278,26 +266,13 @@ class RTRLRTUController(Controller):
         torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=ONLINE_GRAD_CLIP_NORM)
         self.optimizer.step()
 
-        # Hard cap (PART C, found after weight decay alone still lost the
-        # race over 50 episodes -- W_out norm reached 9.6, re-saturating the
-        # action, since a soft L2 pull can always be outrun by enough
-        # systematically-directioned gradient steps, ~15000 of them here).
-        # A healthy warm-started output_layer has norm ~0.94 (measured);
-        # MAX_OUTPUT_NORM leaves generous headroom for genuine adaptation
-        # while guaranteeing boundedness regardless of training length,
-        # which a soft penalty alone cannot.
-        with torch.no_grad():
-            w_norm = self.output_layer.weight.norm()
-            if w_norm > MAX_OUTPUT_NORM:
-                self.output_layer.weight.mul_(MAX_OUTPUT_NORM / w_norm)
-            self.output_layer.bias.clamp_(-MAX_OUTPUT_NORM, MAX_OUTPUT_NORM)
-
         return {"online_loss": loss}
 
     def reset(self) -> None:
         self.h = self.cell.init_hidden()
         self.sensitivity = SensitivityState.zeros(self.hidden_size, self.input_size)
         self._reward_history = deque(maxlen=REWARD_WINDOW)
+        self._last_logits = torch.zeros(self.action_dim)
 
     def sensitivity_frobenius_norm(self) -> float:
         """sqrt(sum of squares) across all three sensitivity tensors --

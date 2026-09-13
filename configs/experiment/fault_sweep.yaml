@@ -1,0 +1,10 @@
+# Fault scenario sweep (agent_docs/experiments.md, Scenario 2 -- the
+# headline result). `surfaces` is an additional sweep axis on top of
+# seeds x controllers: the runner overrides env.fault.surface per surface
+# (independent runs per surface, not combined -- experiments.md is explicit
+# about this).
+name: fault_sweep
+env: cessna172_fault
+seeds: [0, 1, 2]
+controllers: [pid, bptt_lstm, rtrl_rtu]
+surfaces: [aileron, elevator, rudder]

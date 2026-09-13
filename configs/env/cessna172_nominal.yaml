@@ -1,0 +1,11 @@
+# Nominal scenario (agent_docs/experiments.md, Scenario 1): calm air, no
+# faults. Matches the schema rtrl_flight.env.make.make_env(cfg) expects.
+agent_interaction_freq: 5
+normalize: true
+fault:
+  enabled: false
+wind:
+  enabled: false
+trace:
+  enabled: true
+  output_dir: data/traces/${now:%Y%m%d_%H%M%S}

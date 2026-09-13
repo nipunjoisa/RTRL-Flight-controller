@@ -1,0 +1,18 @@
+# Fault scenario (agent_docs/experiments.md, Scenario 2 -- the headline
+# result). surface/severity/onset_step describe the single mid-episode fault
+# to trigger; the runner is responsible for calling
+# FaultWrapper.trigger_fault(surface, severity) at onset_step (not yet wired
+# up in src/ -- rtrl_flight.env.wrappers.fault.FaultWrapper only exposes the
+# trigger_fault() method itself, agent_docs/architecture.md).
+agent_interaction_freq: 5
+normalize: true
+fault:
+  enabled: true
+  surface: aileron
+  severity: 0.5
+  onset_step: 150
+wind:
+  enabled: false
+trace:
+  enabled: true
+  output_dir: data/traces/${now:%Y%m%d_%H%M%S}

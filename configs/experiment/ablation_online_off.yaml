@@ -1,0 +1,14 @@
+# Ablation: online updates disabled (agent_docs/experiments.md, Scenario 5
+# -- the paper's central causal claim). Identical to fault_sweep's setup but
+# rtrl_rtu only, with online_updates forced false -- same warm-started
+# weights, controller.update() just never called by the runner (no
+# branching needed, agent_docs/architecture.md). `controller_overrides` is
+# merged onto the composed `+controller=rtrl_rtu` config by the runner (not
+# yet built) rather than needing a second rtrl_rtu-online-off.yaml file that
+# could drift from rtrl_rtu.yaml.
+name: ablation_online_off
+env: cessna172_fault
+seeds: [0, 1, 2]
+controllers: [rtrl_rtu]
+controller_overrides:
+  online_updates: false

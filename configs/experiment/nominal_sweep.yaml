@@ -1,0 +1,8 @@
+# Nominal scenario sweep (agent_docs/experiments.md, Scenario 1).
+# Declarative sweep spec -- scripts/run_experiment.py (not yet built) is
+# responsible for the seeds x controllers cartesian product and for
+# `+env=cessna172_nominal` / `+controller=<name>` composition per run.
+name: nominal_sweep
+env: cessna172_nominal
+seeds: [0, 1, 2]
+controllers: [pid, bptt_lstm, rtrl_rtu]

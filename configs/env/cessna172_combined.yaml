@@ -1,0 +1,16 @@
+# Combined scenario (agent_docs/experiments.md, Scenario 4 -- the demo):
+# fault + wind simultaneously, moderate severity for both (not each's
+# worst case -- see experiments.md for why).
+agent_interaction_freq: 5
+normalize: true
+fault:
+  enabled: true
+  surface: aileron
+  severity: 0.5
+  onset_step: 150
+wind:
+  enabled: true
+  level: moderate
+trace:
+  enabled: true
+  output_dir: data/traces/${now:%Y%m%d_%H%M%S}

@@ -1,0 +1,17 @@
+# Top-level Hydra config. Per agent_docs/architecture.md: configs live under
+# configs/{controller,env,experiment}/ and every run selects one of each
+# explicitly via `+controller=...`, `+env=...`, `+experiment=...` -- there is
+# deliberately no default controller/env/experiment declared here (an empty
+# defaults list beyond _self_), so a run can never silently pick up a group
+# it didn't ask for. This matches CLAUDE.md's "One Hydra config per
+# experiment" -- nothing hidden, nothing implicit.
+#
+# (Declaring `controller: null` etc. in this defaults list is the more
+# common Hydra pattern, but it requires selecting a value with plain
+# `controller=pid`, not `+controller=pid` -- confirmed by compose() raising
+# "Multiple values for controller" otherwise. Left out entirely so `+` works
+# as expected for every group.)
+defaults:
+  - _self_
+
+seed: 0

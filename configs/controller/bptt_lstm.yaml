@@ -1,0 +1,7 @@
+# BPTT-LSTM baseline (agent_docs/experiments.md: frozen-weights baseline,
+# warm-started via imitation, never updated online -- update() is a no-op
+# per the Controller ABC, see agent_docs/architecture.md).
+_target_: rtrl_flight.controllers.bptt_lstm.BPTTLSTMController
+hidden_size: 64
+num_layers: 2
+lr: 1e-3

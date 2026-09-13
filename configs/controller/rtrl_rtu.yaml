@@ -1,0 +1,9 @@
+# RTRL-RTU controller (agent_docs/rtrl.md). online_updates gates whether
+# Controller.update() actually runs the online RTRL step or is a no-op --
+# this is the ablation switch (agent_docs/experiments.md, Scenario 5):
+# same warm-started weights, online_updates: false for the ablation config,
+# no branching needed in the runner (agent_docs/architecture.md).
+_target_: rtrl_flight.controllers.rtrl_rtu.RTRLRTUController
+hidden_size: 64
+lr: 1e-3
+online_updates: true

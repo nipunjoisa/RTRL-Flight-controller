@@ -1,0 +1,8 @@
+# Wind scenario sweep (agent_docs/experiments.md, Scenario 3). `levels` is
+# the additional sweep axis on top of seeds x controllers: the runner
+# overrides env.wind.level per level.
+name: wind_sweep
+env: cessna172_wind
+seeds: [0, 1, 2]
+controllers: [pid, bptt_lstm, rtrl_rtu]
+levels: [light, moderate, severe]

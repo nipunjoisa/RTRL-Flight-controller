@@ -1,0 +1,12 @@
+# Wind scenario (agent_docs/experiments.md, Scenario 3): Dryden/Tustin
+# turbulence, no faults, unseen-severity generalization test.
+agent_interaction_freq: 5
+normalize: true
+fault:
+  enabled: false
+wind:
+  enabled: true
+  level: moderate
+trace:
+  enabled: true
+  output_dir: data/traces/${now:%Y%m%d_%H%M%S}

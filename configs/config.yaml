@@ -15,3 +15,14 @@ defaults:
   - _self_
 
 seed: 0
+
+# Declared here (not under configs/training/) so `training.episodes=50` etc.
+# work as plain overrides from scripts/train_bptt.py -- unlike controller/
+# env/experiment, training hyperparameters aren't a "select one of several
+# named variants" group, just a few scalars every training entrypoint needs.
+training:
+  episodes: 50
+  epochs: 20
+  lr: 1e-3
+  batch_size: 8
+  checkpoint_path: data/checkpoints/bptt_lstm_pretrain.pt

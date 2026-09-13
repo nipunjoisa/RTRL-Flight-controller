@@ -5,5 +5,5 @@
 # no branching needed in the runner (agent_docs/architecture.md).
 _target_: rtrl_flight.controllers.rtrl_rtu.RTRLRTUController
 hidden_size: 64
-lr: 1e-3
+lr: 1.0e-3
 online_updates: true

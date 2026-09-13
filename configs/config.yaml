@@ -23,7 +23,7 @@ seed: 0
 training:
   episodes: 50
   epochs: 20
-  lr: 1e-3
+  lr: 1.0e-3
   batch_size: 8
   checkpoint_path: data/checkpoints/bptt_lstm_pretrain.pt
   # Below: scripts/train_rtrl_warmstart.py. checkpoint_path above doubles as

@@ -4,4 +4,4 @@
 _target_: rtrl_flight.controllers.bptt_lstm.BPTTLSTMController
 hidden_size: 64
 num_layers: 2
-lr: 1e-3
+lr: 1.0e-3

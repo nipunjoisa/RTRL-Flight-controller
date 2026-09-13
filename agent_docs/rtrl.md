@@ -61,6 +61,24 @@ dL_t/dθ = sum_i ( dL_t/dh_t[i] * S_t^θ[i] )     # sum collapses to one term wh
 
 `Controller.update()` for RTRL-RTU does, per step: forward pass → compute `dL_t/dh_t` → combine with `S_t` for the recurrent-parameter gradients → step an optimizer (Adam state persists across steps, same as any online learner) → advance `S_t` to `S_{t+1}` using the recursion above with the *new* `h_t`. This is what makes it "real-time": no unroll, no replay buffer, one step of work per env step, causal (never looks at future timesteps).
 
+### What `dL_t/dy_t[o]` actually is (# updated at final health-check — this doc left it abstract; here's the concrete, currently-implemented objective, in `src/rtrl_flight/controllers/rtrl_rtu.py`'s `update()`)
+
+**Per-channel tracking loss, not a scalar broadcast to every output.** An earlier version set `dL_t/dy_t[o]` to the *same* value for all three channels (`-reward`, then a running-mean/std-normalized version of it) — mathematically valid as an instance of the general formula above, but it turned out to be the actual root cause of a real failure: broadcasting an identical value to every channel every step, for ~15000 online steps, is *systematically correlated in direction*, not just noisy, and drove `output_layer`'s weights to saturation regardless of how well-scaled that shared value was (clipping/decay/norm-capping could only ever bound the symptom, never the underlying directional bias). The fix, now the actual implementation:
+
+```
+pitch_error = next_obs[9]     # error/pitch-error-rad
+roll_error  = next_obs[10]    # error/roll-error-rad
+targets = [-roll_error, -pitch_error, 0.0]   # [aileron, elevator, rudder]
+
+channel_loss = mean_o (y_t[o] - targets[o])^2
+loss_scale   = 1 + max(0, -normalized_reward)     # normalized_reward: running-mean/std of reward
+dL_t/dy_t[o] = (2 / 3) * (y_t[o] - targets[o]) * loss_scale
+```
+
+Aileron's target is `-roll_error` and elevator's is `-pitch_error` (reduce the corresponding error); rudder has no direct tracking target (its role is yaw-rate damping, not error-tracking) so its target is a constant `0.0`. The reward-normalized `loss_scale` is a *multiplicative weight* on this per-channel loss (upweight bad steps, downweight good ones) — it is not the loss itself, unlike the earlier broadcast version. This makes `dL_t/dy_t` a genuine per-channel vector (each entry depends on that channel's own logit and target), which is what actually stops the systematic drift — see `src/rtrl_flight/controllers/rtrl_rtu.py`'s `update()` docstring/comments for the full incident history.
+
+Practical safeguards that remain in `update()` alongside the correct objective above (none of these substitute for it — they exist because online RTRL on a stiff flight-dynamics task has real failure modes even with a correct gradient): a hidden-state clamp (`RTUCell`'s recurrence is linear/unbounded by design, so raw-scale inputs like altitude can otherwise blow up `h`), a sensitivity-Frobenius-norm sanity check (reset `S` to zero if it exceeds a fixed limit), and a non-finite-reward guard (skip the update entirely if `reward` is `nan`/`inf` or `h` already is — `AttitudeHoldTask` has no safety-bound termination yet, see `environment.md`, so a mid-episode divergence can otherwise poison the optimizer state for the rest of training).
+
 ## Why warm-start is required (not optional)
 
 Cold-start online RTRL on raw flight dynamics diverges — noted as known behavior in CLAUDE.md, not a bug to chase. Two reasons this is expected, not surprising:

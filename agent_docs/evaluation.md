@@ -9,8 +9,9 @@
 
 ## Statistical protocol
 
-- N=10 seeds per (controller, scenario, severity) cell by default (see `experiments.md`).
-- Report median and IQR (not mean ± std) for RMSE/settling-time/jerk — flight-dynamics metrics are heavy-tailed (occasional large excursions), median is more honest here.
+- N=10 seeds per (controller, scenario, severity) cell by default (see `experiments.md`); the sweep actually run (`scripts/run_sweep.py`, `data/results/sweep_results.parquet`) used **N=3** seeds, a scope-discipline reduction under the 14-day budget (per `CLAUDE.md`'s "drop to 5 only if time-constrained" — 3 was used instead; noted here rather than silently reported as 10).
+- **Implemented as mean ± std, not median/IQR** (# updated at final health-check — this section originally specified median/IQR as below). `rtrl_flight.analysis.aggregate.summary_table()` and the generated `report/tables/main_results.md`/`report/figures/*.pdf` all report mean ± std per this project's actual reporting-task spec. The reasoning below for preferring median/IQR on heavy-tailed flight-dynamics metrics still stands as unimplemented guidance — `summary_table()` would need a second code path (or a mode switch) to also emit median/IQR; flagging the gap rather than silently claiming it's covered:
+  - Report median and IQR (not mean ± std) for RMSE/settling-time/jerk — flight-dynamics metrics are heavy-tailed (occasional large excursions), median is more honest here.
 - For the headline RTRL-vs-frozen-BPTT-LSTM comparison in the fault scenario: paired comparison (same seeds, same fault draw) where possible, Wilcoxon signed-rank over per-seed time-to-recover / post-fault RMSE, not just an eyeballed plot.
 - For the ablation (online-on vs. online-off): same paired approach, same seeds and fault draws between the two runs — this is the whole point of holding everything else fixed in `experiments.md` scenario 5.
 

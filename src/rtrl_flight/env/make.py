@@ -26,7 +26,7 @@ from rtrl_flight.env.wrappers.trace import TraceWrapper
 from rtrl_flight.env.wrappers.wind import WindWrapper
 
 
-def _get(cfg: Any, key: str, default: Any) -> Any:
+def cfg_get(cfg: Any, key: str, default: Any) -> Any:
     """cfg.get(key, default) that works for a DictConfig, a plain dict, or None."""
     if cfg is None:
         return default
@@ -35,8 +35,30 @@ def _get(cfg: Any, key: str, default: Any) -> Any:
     return getattr(cfg, key, default)
 
 
+def force_raw_obs(env_cfg: Any) -> Any:
+    """Returns a copy of env_cfg with normalize forced to False.
+
+    Every controller in this repo is trained/calibrated on raw radian-scale
+    obs, not NormalizeWrapper's [-1, 1]-squashed range: PID_GAINS assumes raw
+    error magnitudes (see rtrl_flight.controllers.pid), and BPTT-LSTM/
+    RTRL-RTU are warm-started from PID rollouts collected with normalize
+    forced off (rtrl_flight.training.imitation.pretrain). Metrics computed
+    in physical units (rad) are equally meaningless on normalized obs. Yet
+    configs/env/cessna172_*.yaml default to `normalize: true` -- so both
+    training (imitation.py) and evaluation (the experiment runner) need this
+    override; centralized here instead of duplicated in both places.
+    """
+    if env_cfg is None:
+        return {"normalize": False}
+    if hasattr(env_cfg, "get"):
+        merged = dict(env_cfg)
+        merged["normalize"] = False
+        return merged
+    return env_cfg
+
+
 def make_env(cfg: Any = None) -> gym.Env:
-    agent_interaction_freq = _get(cfg, "agent_interaction_freq", 5)
+    agent_interaction_freq = cfg_get(cfg, "agent_interaction_freq", 5)
 
     env: gym.Env = NoFGJsbSimEnv(
         aircraft=c172,
@@ -49,19 +71,19 @@ def make_env(cfg: Any = None) -> gym.Env:
     # (jsbgym/environment.py), with no hook for extra constructor kwargs, so
     # AttitudeHoldTask always uses its DEFAULT_EPISODE_TIME_S for now.
 
-    if _get(cfg, "normalize", True):
+    if cfg_get(cfg, "normalize", True):
         env = NormalizeWrapper(env)
 
-    fault_cfg = _get(cfg, "fault", None)
-    if _get(fault_cfg, "enabled", False):
+    fault_cfg = cfg_get(cfg, "fault", None)
+    if cfg_get(fault_cfg, "enabled", False):
         env = FaultWrapper(env)
 
-    wind_cfg = _get(cfg, "wind", None)
-    if _get(wind_cfg, "enabled", False):
-        env = WindWrapper(env, level=_get(wind_cfg, "level", "off"))
+    wind_cfg = cfg_get(cfg, "wind", None)
+    if cfg_get(wind_cfg, "enabled", False):
+        env = WindWrapper(env, level=cfg_get(wind_cfg, "level", "off"))
 
-    trace_cfg = _get(cfg, "trace", None)
-    if _get(trace_cfg, "enabled", False):
-        env = TraceWrapper(env, output_dir=_get(trace_cfg, "output_dir", "data/traces"))
+    trace_cfg = cfg_get(cfg, "trace", None)
+    if cfg_get(trace_cfg, "enabled", False):
+        env = TraceWrapper(env, output_dir=cfg_get(trace_cfg, "output_dir", "data/traces"))
 
     return env

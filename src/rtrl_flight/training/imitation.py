@@ -23,7 +23,7 @@ from torch.utils.data import DataLoader, Dataset
 
 from rtrl_flight.controllers.bptt_lstm import BPTTLSTMController
 from rtrl_flight.controllers.pid import PIDController
-from rtrl_flight.env.make import make_env
+from rtrl_flight.env.make import cfg_get, force_raw_obs, make_env
 
 # agent_docs/environment.md's obs table: slot 8 = velocities/r-rad_sec
 # (yaw rate), slot 9 = error/pitch-error-rad, slot 10 = error/roll-error-rad.
@@ -36,17 +36,6 @@ PID_GAINS = {
 }
 
 
-def _cfg_get(cfg: Any, key: str, default: Any) -> Any:
-    """Duck-typed cfg.get(key, default) for a DictConfig, plain dict, or None
-    -- mirrors rtrl_flight.env.make._get, duplicated locally to avoid a
-    cross-module dependency on a "private" helper."""
-    if cfg is None:
-        return default
-    if hasattr(cfg, "get"):
-        return cfg.get(key, default)
-    return getattr(cfg, key, default)
-
-
 # Raw-obs crash-detection bounds (see collect_pid_rollouts): AttitudeHoldTask
 # has no safety-bound termination yet (agent_docs/environment.md flags this
 # as a known gap), and PID_GAINS's placeholder values (never validated
@@ -55,7 +44,7 @@ def _cfg_get(cfg: Any, key: str, default: Any) -> Any:
 # impact, with pitch/roll blowing far past the ±0.3/±0.4 rad target range,
 # eventually producing float32-overflowing state as JSBSim keeps integrating
 # an already-crashed aircraft for the rest of the fixed-length episode.
-# These bounds assume RAW (non-normalized) obs -- see _force_raw_obs.
+# These bounds assume RAW (non-normalized) obs -- see rtrl_flight.env.make.force_raw_obs.
 CRASH_MIN_ALTITUDE_FT = 100.0
 CRASH_MAX_ABS_PITCH_RAD = 1.4  # task only ever targets ±0.3 rad
 CRASH_MAX_ABS_ROLL_RAD = 2.5  # task only ever targets ±0.4 rad
@@ -173,31 +162,6 @@ def train_bptt(
     return epoch_losses
 
 
-def _force_raw_obs(env_cfg: Any) -> Any:
-    """PID_GAINS is tuned for raw radian-scale error (see
-    PID_OBS_INDICES / configs/controller/pid.yaml), not NormalizeWrapper's
-    [-1, 1]-squashed output. Collecting rollouts through a normalized env
-    (e.g. configs/env/cessna172_nominal.yaml has normalize: true) makes the
-    PID under-correct by roughly 10-30x -- pitch/roll error near a small
-    target (±0.3/±0.4 rad) normalizes to a tiny number, so the same
-    proportional gain produces a barely-there command, and the aircraft
-    slowly diverges until JSBSim's state overflows (observed empirically:
-    a RuntimeWarning "overflow encountered in cast" in rtrl_flight.env.reward
-    followed by NaN training loss). Forcing normalize off here is a
-    training-time-only decision for the *rollout-collection* env -- it does
-    not change AttitudeHoldTask's or NormalizeWrapper's actual observation
-    space, and has no bearing on what normalization the eventual deployed/
-    evaluation env uses.
-    """
-    if env_cfg is None:
-        return {"normalize": False}
-    if hasattr(env_cfg, "get"):
-        merged = dict(env_cfg)
-        merged["normalize"] = False
-        return merged
-    return env_cfg
-
-
 def pretrain(
     env_cfg: Any,
     n_episodes: int,
@@ -211,9 +175,9 @@ def pretrain(
     """collect_pid_rollouts + train_bptt, then saves a checkpoint. Returns
     the final epoch's mean MSE loss.
     """
-    env = make_env(_force_raw_obs(env_cfg))
+    env = make_env(force_raw_obs(env_cfg))
     try:
-        agent_interaction_freq = _cfg_get(env_cfg, "agent_interaction_freq", 5)
+        agent_interaction_freq = cfg_get(env_cfg, "agent_interaction_freq", 5)
         pid = PIDController(
             gains=PID_GAINS, obs_indices=PID_OBS_INDICES, dt=1.0 / agent_interaction_freq
         )

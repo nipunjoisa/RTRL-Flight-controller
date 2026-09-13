@@ -71,6 +71,23 @@ def apply_warmstart(rtu_controller: Any, bptt_state_dict: dict[str, Any]) -> Non
       when hidden_size matches between the two controllers. Left at RTU's
       own random init otherwise; a mismatched Linear(hidden_a, 3) has no
       defensible partial-copy into Linear(hidden_b, 3).
+
+    NOT RESCALED, despite BPTT-LSTM being trained on RAW-scale obs (e.g.
+    altitude ~5000ft) while RTRLRTUController normalizes its own input to
+    [-1, 1] (see rtrl_rtu.py's OBS_LOW/OBS_HIGH docstring for why -- the
+    warm-started, zero-online-update controller's hidden state otherwise
+    blows up on raw obs: h's norm reached ~28000 after 30 steps in the
+    PART C retraining session). A first attempt "corrected" for this by
+    rescaling W_in to reproduce the LSTM's exact original (raw-input)
+    affine output on normalized input -- but that output was ALREADY huge
+    in magnitude (e.g. altitude(~5000) x weight(~0.56) ~2800), which is
+    completely fine for an LSTM (the sigmoid/tanh gate immediately
+    downstream saturates regardless of scale) but is exactly the wrong
+    thing to reproduce for RTU, whose z_t has no squashing at all. The copy
+    is therefore left unscaled: on a normalized (~[-1,1]) input, the raw
+    LSTM weight values alone already keep z_t = W_in@x_t + b_in in a
+    reasonable range (confirmed empirically after this fix -- see the
+    PART C session).
     """
     cell = rtu_controller.cell
     lstm_state = bptt_state_dict["lstm_state_dict"]

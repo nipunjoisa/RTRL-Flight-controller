@@ -10,19 +10,20 @@ terminal, not composed into an experiment sweep.
 Usage:
   python scripts/live_demo.py --controller rtrl_rtu --env cessna172_fault
 
-Keys (while the plot window has focus):
-  f       trigger_fault('aileron', 0.5)   (no-op + console note if this env
-  e       trigger_fault('elevator', 0.5)   has no FaultWrapper, e.g. nominal)
-  r       trigger_fault('rudder', 0.5)
-  w       cycle wind off -> light -> moderate -> severe -> off (same caveat
-          for envs with no WindWrapper)
-  space   reset the episode (controller weights are untouched --
-          reset() only clears episode-local state, per the Controller ABC)
+Controls: a row of buttons along the bottom of the window --
+  Fault: aileron / Fault: elevator / Fault: rudder   trigger_fault(surface, 0.5)
+  Cycle wind                                          off -> light -> moderate -> severe -> off
+  Reset episode                                       controller weights untouched --
+                                                       reset() only clears episode-local state
+Fault/wind buttons are no-ops (with a console note) if the chosen env has no
+FaultWrapper/WindWrapper, e.g. nominal. The same actions are also bound to
+keyboard shortcuts f/e/r/w/space for anyone who prefers the keyboard.
 """
 
 from __future__ import annotations
 
 import argparse
+import warnings
 from collections import deque
 from pathlib import Path
 from typing import Any
@@ -30,6 +31,7 @@ from typing import Any
 import matplotlib.pyplot as plt
 import numpy as np
 import yaml
+from matplotlib.widgets import Button
 
 from rtrl_flight.env.make import force_raw_obs, make_env
 from rtrl_flight.env.wrappers.fault import FaultWrapper
@@ -40,6 +42,21 @@ CONFIGS_DIR = Path(__file__).resolve().parent.parent / "configs"
 HISTORY_LEN = 200
 SMOOTHING_WINDOW = 10
 WIND_CYCLE = ("off", "light", "moderate", "severe")
+
+KEY_TABLE = (
+    ("f", "trigger aileron fault @ 50% severity"),
+    ("e", "trigger elevator fault @ 50% severity"),
+    ("r", "trigger rudder fault @ 50% severity"),
+    ("w", "cycle wind: off -> light -> moderate -> severe"),
+    ("space", "reset episode (controller weights untouched)"),
+)
+
+
+def format_key_table() -> str:
+    key_width = max(len(k) for k, _ in KEY_TABLE)
+    lines = [f"{'Key':<{key_width}}  Effect"]
+    lines += [f"{k:<{key_width}}  {desc}" for k, desc in KEY_TABLE]
+    return "\n".join(lines)
 
 
 def _available_names(subdir: str) -> list[str]:
@@ -233,8 +250,16 @@ def redraw(
         f"Episode return: {state.episode_return:.1f}",
     ]
     ax_text.text(0.05, 0.9, "\n".join(lines), va="top", family="monospace", fontsize=12)
+    ax_text.text(0.05, 0.55, format_key_table(), va="top", family="monospace", fontsize=9)
 
-    fig.tight_layout()
+    # rect leaves the bottom strip (button row) out of the layout target.
+    # The button axes themselves are added via fig.add_axes(), not the
+    # subplots() gridspec, so tight_layout can't place them anyway --
+    # suppress its one-time "not compatible with tight_layout" warning
+    # rather than let it spam the console every redraw.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        fig.tight_layout(rect=(0, 0.16, 1, 1))
 
 
 def main() -> None:
@@ -262,34 +287,71 @@ def main() -> None:
     state = DemoState()
     wind_index = WIND_CYCLE.index(wind_wrapper.wind_level) if wind_wrapper is not None else 0
 
-    def on_key(event: Any) -> None:
+    # Shared by both the buttons and the keyboard shortcuts below, so the two
+    # input paths can't drift out of sync with each other.
+    def do_fault(surface: str) -> None:
+        if fault_wrapper is not None:
+            fault_wrapper.trigger_fault(surface, 0.5)
+        else:
+            print(f"no FaultWrapper in this env -- {surface} fault is a no-op")
+
+    def do_wind_cycle() -> None:
         nonlocal wind_index
+        if wind_wrapper is not None:
+            wind_index = (wind_index + 1) % len(WIND_CYCLE)
+            wind_wrapper.set_severity(WIND_CYCLE[wind_index])
+        else:
+            print("no WindWrapper in this env -- wind cycle is a no-op")
+
+    def on_key(event: Any) -> None:
         if event.key == "f":
-            if fault_wrapper is not None:
-                fault_wrapper.trigger_fault("aileron", 0.5)
-            else:
-                print("no FaultWrapper in this env -- 'f' is a no-op")
+            do_fault("aileron")
         elif event.key == "e":
-            if fault_wrapper is not None:
-                fault_wrapper.trigger_fault("elevator", 0.5)
-            else:
-                print("no FaultWrapper in this env -- 'e' is a no-op")
+            do_fault("elevator")
         elif event.key == "r":
-            if fault_wrapper is not None:
-                fault_wrapper.trigger_fault("rudder", 0.5)
-            else:
-                print("no FaultWrapper in this env -- 'r' is a no-op")
+            do_fault("rudder")
         elif event.key == "w":
-            if wind_wrapper is not None:
-                wind_index = (wind_index + 1) % len(WIND_CYCLE)
-                wind_wrapper.set_severity(WIND_CYCLE[wind_index])
-            else:
-                print("no WindWrapper in this env -- 'w' is a no-op")
+            do_wind_cycle()
         elif event.key == " ":
             state.reset_requested = True
 
+    # This demo's key handler owns f/e/r/w/space. matplotlib's default
+    # keymaps also bind several of these (f -> fullscreen, r -> reset view,
+    # s -> save) and fire *in addition* to on_key since both are registered
+    # on the same "key_press_event". Toggling fullscreen mid-redraw is what
+    # was crashing the window on 'f' -- strip the overlapping bindings so
+    # only this demo's handler responds to them.
+    _CLAIMED_KEYS = {"f", "e", "r", "w", " "}
+    for rc_key in list(plt.rcParams):
+        if rc_key.startswith("keymap."):
+            plt.rcParams[rc_key] = [k for k in plt.rcParams[rc_key] if k not in _CLAIMED_KEYS]
+
     fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(12, 8))
     fig.canvas.mpl_connect("key_press_event", on_key)
+    # Reserve a strip along the bottom of the window for the button row,
+    # below the 2x2 plot grid laid out by subplots() above.
+    fig.subplots_adjust(bottom=0.18)
+
+    button_specs = (
+        ("Fault: aileron", lambda _event: do_fault("aileron")),
+        ("Fault: elevator", lambda _event: do_fault("elevator")),
+        ("Fault: rudder", lambda _event: do_fault("rudder")),
+        ("Cycle wind", lambda _event: do_wind_cycle()),
+        ("Reset episode", lambda _event: setattr(state, "reset_requested", True)),
+    )
+    n_buttons = len(button_specs)
+    margin, gap, height = 0.02, 0.02, 0.06
+    width = (1.0 - 2 * margin - (n_buttons - 1) * gap) / n_buttons
+    # Keep references to the Button objects on the figure -- matplotlib
+    # widgets stop responding to clicks if nothing keeps them alive past
+    # this function's local scope.
+    fig._buttons = []
+    for i, (label, callback) in enumerate(button_specs):
+        left = margin + i * (width + gap)
+        button_ax = fig.add_axes((left, 0.05, width, height))
+        button = Button(button_ax, label)
+        button.on_clicked(callback)
+        fig._buttons.append(button)
 
     def do_reset() -> np.ndarray:
         controller.reset()

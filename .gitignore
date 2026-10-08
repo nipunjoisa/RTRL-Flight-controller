@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.python-version
+
+# uv
+uv.lock.bak
+
+# Data & outputs (per CLAUDE.md: never commit these)
+data/
+outputs/
+multirun/
+wandb/
+*.parquet
+
+# Notebooks
+notebooks/**/*.ipynb_checkpoints/
+.ipynb_checkpoints/
+
+# Test / tooling
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

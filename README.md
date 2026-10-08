@@ -142,7 +142,7 @@ flowchart LR
     X --> Z[Next: find why the warm-started<br/>policy diverges at deploy time]
 ```
 
-The full write-up is in `RTRL_Results_and_Conclusion.pdf` and `report/`.
+The full write-up is in `report/`.
 
 ## Setup
 
